@@ -8,6 +8,62 @@ if ! grep -q '^name: snapcraft$' "${SNAPCRAFT_DIR}/snap/snapcraft.yaml"; then
     exit 1
 fi
 
+# Check whether the user may be in an HTTP(S) proxy only network.
+http_proxy_detected=
+if test -v HTTP_PROXY || test -v http_proxy; then
+    printf \
+        'HTTP proxy environment detected, configuring LXD HTTP proxy settings...\n'
+    for env_name in HTTP_PROXY http_proxy; do
+        if test -v "${env_name}"; then
+            http_proxy_detected="${!env_name}"
+            break
+        fi
+    done
+
+    if ! lxc_config_proxy_http="$(lxc config get core.proxy_http)"; then
+        printf \
+            'Unable to query the value of the core.proxy_http LXD server configuration.\n' \
+            1>&2
+        exit 1
+    fi
+
+    if test "${lxc_config_proxy_http}" != "${http_proxy_detected}"; then
+        if ! lxc config set core.proxy_http="${http_proxy_detected}"; then
+            printf \
+                'Error: Unable to set the value of the core.proxy_http LXD server configuration.\n' \
+                1>&2
+            exit 1
+        fi
+    fi
+fi
+
+https_proxy_detected=
+if test -v HTTPS_PROXY || test -v https_proxy; then
+    printf 'HTTPS proxy environment detected, configuring LXD HTTPS proxy settings...\n'
+    for env_name in HTTPS_PROXY https_proxy; do
+        if test -v "${env_name}"; then
+            https_proxy_detected="${!env_name}"
+            break
+        fi
+    done
+
+    if ! lxc_config_proxy_https="$(lxc config get core.proxy_https)"; then
+        printf \
+            'Error: Unable to query the value of the core.proxy_https LXD server configuration.\n' \
+            1>&2
+        exit 1
+    fi
+
+    if test "${lxc_config_proxy_https}" != "${https_proxy_detected}"; then
+        if ! lxc config set core.proxy_https="${https_proxy_detected}"; then
+            printf \
+                'Error: Unable to set the value of the core.proxy_https LXD server configuration.\n' \
+                1>&2
+            exit 1
+        fi
+    fi
+fi
+
 # Create the container.
 if ! lxc info snapcraft-dev >/dev/null 2>&1; then
     lxc init ubuntu:22.04 snapcraft-dev
@@ -30,6 +86,53 @@ lxc exec snapcraft-dev -- sudo -iu ubuntu bash -c true
 if ! lxc config device show snapcraft-dev | grep -q snapcraft-project; then
     lxc config device add snapcraft-dev snapcraft-project disk \
         source="$SNAPCRAFT_DIR" path=/home/ubuntu/snapcraft
+fi
+
+# Set proxy on login.
+if test -n "${http_proxy_detected}"; then
+    lxc exec snapcraft-dev -- sudo -iu ubuntu bash -c \
+        "echo 'export HTTP_PROXY=${http_proxy_detected}' >> .profile"
+    lxc exec snapcraft-dev -- sudo -iu ubuntu bash -c \
+        "echo 'export http_proxy=${http_proxy_detected}' >> .profile"
+fi
+if test -n "${https_proxy_detected}"; then
+    lxc exec snapcraft-dev -- sudo -iu ubuntu bash -c \
+        "echo 'export HTTPS_PROXY=${https_proxy_detected}' >> .profile"
+    lxc exec snapcraft-dev -- sudo -iu ubuntu bash -c \
+        "echo 'export https_proxy=${https_proxy_detected}' >> .profile"
+fi
+
+# Tell sudo to passthrough the proxy related environment variables
+if ! temp_dir="$(mktemp -dt snapcraft.XXXXXX)"; then
+    printf 'Error: Unable to create the temporary directory.\n' 1>&2
+    exit 1
+fi
+trap 'rm -rf "${temp_dir}"' EXIT
+
+# Configure snapd to use the HTTP(S) proxy
+if test -n "${http_proxy_detected}"; then
+    lxc exec snapcraft-dev -- \
+        sudo snap set system proxy.http="${http_proxy_detected}"
+fi
+
+if test -n "${https_proxy_detected}"; then
+    lxc exec snapcraft-dev -- \
+        sudo snap set system proxy.https="${https_proxy_detected}"
+fi
+
+printf \
+    'Defaults env_keep += "HTTP_PROXY http_proxy HTTPS_PROXY https_proxy"\n' \
+    >"${temp_dir}/allow-http-proxy"
+if ! \
+    lxc file push \
+        --uid 0 \
+        --gid 0 \
+        --mode 0640 \
+        "${temp_dir}/allow-http-proxy" \
+        snapcraft-dev/etc/sudoers.d/allow-http-proxy; then
+    printf \
+        'Error: Unable to install the sudo security policy drop-in file for allowing HTTP(S) proxy environment variables to pass-through.\n' \
+        1>&2
 fi
 
 # Install snapcraft and dependencies.
