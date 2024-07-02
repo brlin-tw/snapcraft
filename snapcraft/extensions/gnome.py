@@ -1,6 +1,6 @@
 # -*- Mode:Python; indent-tabs-mode:nil; tab-width:4 -*-
 #
-# Copyright 2022 Canonical Ltd.
+# Copyright 2022,2024 Canonical Ltd.
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 3 as
@@ -24,13 +24,18 @@ from overrides import overrides
 
 from .extension import Extension, get_extensions_data_dir, prepend_to_env
 
-_SDK_SNAP = {"core22": "gnome-42-2204-sdk"}
-_PLATFORM_TRANSLATION = {"core22": "2204"}
+_SDK_SNAP = {"core22": "gnome-42-2204-sdk", "core24": "gnome-46-2404-sdk"}
+_PLATFORM_TRANSLATION = {"core22": "2204", "core24": "2404"}
 
 
 @dataclasses.dataclass
 class GNOMESnaps:
-    """A structure of GNOME related snaps."""
+    """A structure of GNOME related snaps.
+
+    :cvar sdk: The name of the SDK snap to use.
+    :cvar content: The name of the content snap to use.
+    :cvar builtin: True if the SDK is built into the content snap.
+    """
 
     sdk: str
     content: str
@@ -67,7 +72,7 @@ class GNOME(Extension):
     @staticmethod
     @overrides
     def get_supported_bases() -> Tuple[str, ...]:
-        return ("core22",)
+        return ("core22", "core24")
 
     @staticmethod
     @overrides
@@ -81,8 +86,11 @@ class GNOME(Extension):
 
     @overrides
     def get_app_snippet(self) -> Dict[str, Any]:
+        command_chain = ["snap/command-chain/desktop-launch"]
+        if self.yaml_data["base"] == "core24":
+            command_chain.insert(0, "snap/command-chain/gpu-2404-wrapper")
         return {
-            "command-chain": ["snap/command-chain/desktop-launch"],
+            "command-chain": command_chain,
             "plugs": [
                 "desktop",
                 "desktop-legacy",
@@ -103,6 +111,8 @@ class GNOME(Extension):
         for part in self.yaml_data["parts"].values():
             build_snaps.extend(part.get("build-snaps", []))
 
+        # use the sdk snap if it is defined in any part's build-snaps
+        # otherwise, assume it is built into the content snap
         matcher = re.compile(r"gnome-\d+-" + _PLATFORM_TRANSLATION[base] + r"-sdk.*")
         sdk_snap_candidates = [s for s in build_snaps if matcher.match(s)]
         if sdk_snap_candidates:
@@ -118,6 +128,34 @@ class GNOME(Extension):
     @overrides
     def get_root_snippet(self) -> Dict[str, Any]:
         platform_snap = self.gnome_snaps.content
+        base = self.yaml_data["base"]
+
+        match base:
+            case "core22":
+                gpu_plugs = {}
+                gpu_layouts = {
+                    "/usr/share/libdrm": {
+                        "bind": "$SNAP/gnome-platform/usr/share/libdrm"
+                    },
+                }
+            case "core24":
+                gpu_plugs = {
+                    "gpu-2404": {
+                        "interface": "content",
+                        "target": "$SNAP/gpu-2404",
+                        "default-provider": "mesa-2404",
+                    },
+                }
+
+                gpu_layouts = {
+                    "/usr/share/libdrm": {"bind": "$SNAP/gpu-2404/libdrm"},
+                    "/usr/share/drirc.d": {"symlink": "$SNAP/gpu-2404/drirc.d"},
+                    "/usr/share/X11/XErrorDB": {
+                        "symlink": "$SNAP/gpu-2404/X11/XErrorDB"
+                    },
+                }
+            case _:
+                raise AssertionError(f"Unsupported base: {base}")
 
         return {
             "assumes": ["snapd2.43"],  # for 'snapctl is-connected'
@@ -143,6 +181,7 @@ class GNOME(Extension):
                     "target": "$SNAP/gnome-platform",
                     "default-provider": platform_snap,
                 },
+                **gpu_plugs,
             },
             "environment": {
                 "SNAP_DESKTOP_RUNTIME": "$SNAP/gnome-platform",
@@ -155,13 +194,22 @@ class GNOME(Extension):
                 }
             },
             "layout": {
-                "/usr/lib/$SNAPCRAFT_ARCH_TRIPLET/webkit2gtk-4.0": {
-                    "bind": "$SNAP/gnome-platform/usr/lib/$SNAPCRAFT_ARCH_TRIPLET/webkit2gtk-4.0"
+                "/usr/lib/$CRAFT_ARCH_TRIPLET_BUILD_FOR/webkit2gtk-4.0": {
+                    "bind": (
+                        "$SNAP/gnome-platform/usr/lib/"
+                        "$CRAFT_ARCH_TRIPLET_BUILD_FOR/webkit2gtk-4.0"
+                    )
+                },
+                "/usr/lib/$CRAFT_ARCH_TRIPLET_BUILD_FOR/webkit2gtk-4.1": {
+                    "bind": (
+                        "$SNAP/gnome-platform/usr/lib/"
+                        "$CRAFT_ARCH_TRIPLET_BUILD_FOR/webkit2gtk-4.1"
+                    )
                 },
                 "/usr/share/xml/iso-codes": {
                     "bind": "$SNAP/gnome-platform/usr/share/xml/iso-codes"
                 },
-                "/usr/share/libdrm": {"bind": "$SNAP/gnome-platform/usr/share/libdrm"},
+                **gpu_layouts,
             },
         }
 
@@ -180,7 +228,7 @@ class GNOME(Extension):
                     "XDG_DATA_DIRS": prepend_to_env(
                         "XDG_DATA_DIRS",
                         [
-                            f"$SNAPCRAFT_STAGE/usr/share:/snap/{sdk_snap}/current/usr/share",
+                            f"$CRAFT_STAGE/usr/share:/snap/{sdk_snap}/current/usr/share",
                             "/usr/share",
                         ],
                     ),
@@ -189,11 +237,14 @@ class GNOME(Extension):
                     "LD_LIBRARY_PATH": prepend_to_env(
                         "LD_LIBRARY_PATH",
                         [
-                            f"/snap/{sdk_snap}/current/lib/$CRAFT_ARCH_TRIPLET",
-                            f"/snap/{sdk_snap}/current/usr/lib/$CRAFT_ARCH_TRIPLET",
+                            f"/snap/{sdk_snap}/current/lib/$CRAFT_ARCH_TRIPLET_BUILD_FOR",
+                            f"/snap/{sdk_snap}/current/usr/lib/$CRAFT_ARCH_TRIPLET_BUILD_FOR",
                             f"/snap/{sdk_snap}/current/usr/lib",
                             f"/snap/{sdk_snap}/current/usr/lib/vala-current",
-                            f"/snap/{sdk_snap}/current/usr/lib/$CRAFT_ARCH_TRIPLET/pulseaudio",
+                            (
+                                f"/snap/{sdk_snap}/current/usr/lib/"
+                                "$CRAFT_ARCH_TRIPLET_BUILD_FOR/pulseaudio"
+                            ),
                         ],
                     ),
                 },
@@ -201,7 +252,10 @@ class GNOME(Extension):
                     "PKG_CONFIG_PATH": prepend_to_env(
                         "PKG_CONFIG_PATH",
                         [
-                            f"/snap/{sdk_snap}/current/usr/lib/$CRAFT_ARCH_TRIPLET/pkgconfig",
+                            (
+                                f"/snap/{sdk_snap}/current/usr/lib/"
+                                "$CRAFT_ARCH_TRIPLET_BUILD_FOR/pkgconfig"
+                            ),
                             f"/snap/{sdk_snap}/current/usr/lib/pkgconfig",
                             f"/snap/{sdk_snap}/current/usr/share/pkgconfig",
                         ],
@@ -217,7 +271,7 @@ class GNOME(Extension):
                 },
                 {
                     "GDK_PIXBUF_MODULE_FILE": (
-                        f"/snap/{sdk_snap}/current/usr/lib/$CRAFT_ARCH_TRIPLET"
+                        f"/snap/{sdk_snap}/current/usr/lib/$CRAFT_ARCH_TRIPLET_BUILD_FOR"
                         "/gdk-pixbuf-current/loaders.cache"
                     ),
                 },
@@ -235,17 +289,38 @@ class GNOME(Extension):
                         [
                             f"/snap/{sdk_snap}/current/usr/lib/python3.10",
                             f"/snap/{sdk_snap}/current/usr/lib/python3/dist-packages",
-                            f"/snap/{sdk_snap}/current/usr/lib/$CRAFT_ARCH_TRIPLET"
+                            f"/snap/{sdk_snap}/current/usr/lib/$CRAFT_ARCH_TRIPLET_BUILD_FOR"
                             "/gobject-introspection",
                         ],
                     ),
+                },
+                {
+                    "GI_TYPELIB_PATH": prepend_to_env(
+                        "GI_TYPELIB_PATH",
+                        [
+                            f"/snap/{sdk_snap}/current/usr/lib/girepository-1.0",
+                            (
+                                f"/snap/{sdk_snap}/current/usr/lib/"
+                                "$CRAFT_ARCH_TRIPLET_BUILD_FOR/girepository-1.0"
+                            ),
+                        ],
+                    )
                 },
             ],
         }
 
     @overrides
     def get_parts_snippet(self) -> Dict[str, Any]:
+        """Get the parts snippet for the GNOME extension.
+
+        If the GNOME SDK is not built into the content snap, the add the
+        sdk snap as a build-snap.
+        """
         source = get_extensions_data_dir() / "desktop" / "command-chain"
+
+        gpu_opts = {}
+        if self.yaml_data["base"] == "core24":
+            gpu_opts["make-parameters"] = ["GPU_WRAPPER=gpu-2404-wrapper"]
 
         if self.gnome_snaps.builtin:
             base = self.yaml_data["base"]
@@ -255,12 +330,14 @@ class GNOME(Extension):
                     "source": str(source),
                     "plugin": "make",
                     "build-snaps": [sdk_snap],
-                }
+                    **gpu_opts,
+                },
             }
 
         return {
             "gnome/sdk": {
                 "source": str(source),
                 "plugin": "make",
-            }
+                **gpu_opts,
+            },
         }

@@ -64,7 +64,6 @@ dev_requires = [
     "coverage[toml]",
     "pyflakes",
     "fixtures",
-    "isort",
     "mccabe",
     "mypy",
     "testscenarios",
@@ -74,18 +73,15 @@ dev_requires = [
     "pydocstyle",
     "pyftpdlib",
     "pyinstaller; sys_platform == 'win32'",
-    "pylint<3",
-    "pylint-fixme-info",
-    "pylint-pytest",
     "pyramid",
     "pytest",
     "pytest-cov",
     "pytest-mock",
     "pytest-subprocess",
-    "ruff",
     "tox>=4.5",
     "types-PyYAML",
-    "types-requests",
+    # types-requests>=2.31.0.7 requires urllib3>=2
+    "types-requests==2.31.0.6",
     "types-setuptools",
     "types-simplejson",
     "types-tabulate",
@@ -97,10 +93,11 @@ install_requires = [
     "attrs",
     "catkin-pkg; sys_platform == 'linux'",
     "click",
+    "craft-application>=3.0.0",
     "craft-archives",
     "craft-cli",
     "craft-grammar",
-    "craft-parts",
+    "craft-parts>=1.32.0",
     "craft-providers",
     "craft-store",
     "docutils<0.20",  # Frozen until we can update sphinx dependencies.
@@ -137,9 +134,15 @@ install_requires = [
     "urllib3<2",  # requests-unixsocket does not yet work with urllib3 v2.0+
 ]
 
-extras_requires = {
-    "dev": dev_requires,
+docs_requires = {
+    "canonical-sphinx",
+    "pyspelling",
+    "sphinxcontrib-details-directive",
+    "sphinx-autobuild",
+    "sphinx-lint",
 }
+
+extras_requires = {"dev": dev_requires, "docs": docs_requires}
 
 setup(
     name=name,
@@ -154,7 +157,7 @@ setup(
     entry_points=dict(
         console_scripts=[
             "snapcraft_legacy = snapcraft_legacy.cli.__main__:run",
-            "snapcraft = snapcraft.cli:run",
+            "snapcraft = snapcraft.application:main",
         ]
     ),
     data_files=(

@@ -8,7 +8,7 @@ jobs:
 
     steps:
       - name: Checkout snapcraft
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
@@ -17,7 +17,7 @@ jobs:
         uses: snapcore/action-build@v1
 
       - name: Upload snapcraft snap
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: snap
           path: ${{ steps.build-snapcraft.outputs.snap }}
@@ -27,7 +27,7 @@ jobs:
           sudo snap install --dangerous --classic ${{ steps.build-snapcraft.outputs.snap }}
 
   integration-spread-tests:
-    runs-on: self-hosted
+    runs-on: [spread-installed]
     needs: build
     strategy:
       # FIXME: enable fail-fast mode once spread can cancel an executing job.
@@ -40,16 +40,17 @@ jobs:
         spread-jobs:
           - google:ubuntu-20.04-64
           - google:ubuntu-22.04-64
+          - google:ubuntu-24.04-64
 
     steps:
       - name: Checkout snapcraft
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
           submodules: true
 
       - name: Download snapcraft snap
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
           name: snap
           path: tests
@@ -69,7 +70,7 @@ jobs:
           done
 
   integration-spread-tests-store:
-    runs-on: self-hosted
+    runs-on: [spread-installed]
     needs: build
     strategy:
       # FIXME: enable fail-fast mode once spread can cancel an executing job.
@@ -93,14 +94,14 @@ jobs:
 
       - if: steps.decisions.outputs.RUN == 'true'
         name: Checkout snapcraft
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
           submodules: true
 
       - if: steps.decisions.outputs.RUN == 'true'
         name: Download snapcraft snap
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
           name: snap
           path: tests

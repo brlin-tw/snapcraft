@@ -105,11 +105,11 @@ class ColconPlugin(_ros.RosPlugin):
 
     @overrides
     def get_build_packages(self) -> Set[str]:
-        return super().get_build_packages() | {
-            "python3-colcon-common-extensions",
-            "python3-rosinstall",
-            "python3-wstool",
-        }
+        base = self._part_info.base
+        build_packages = {"python3-colcon-common-extensions"}
+        if base == "core22":
+            build_packages |= {"python3-rosinstall", "python3-wstool"}
+        return super().get_build_packages() | build_packages
 
     @overrides
     def get_build_environment(self) -> Dict[str, str]:
@@ -197,7 +197,16 @@ class ColconPlugin(_ros.RosPlugin):
         if options.colcon_packages:
             build_command.extend(["--packages-select", *options.colcon_packages])
 
-        if options.colcon_cmake_args:
+        # compile in release only if user did not set the build type in cmake-args
+        if not any("-DCMAKE_BUILD_TYPE=" in s for s in options.colcon_cmake_args):
+            build_command.extend(
+                [
+                    "--cmake-args",
+                    "-DCMAKE_BUILD_TYPE=Release",
+                    *options.colcon_cmake_args,
+                ]
+            )
+        elif len(options.colcon_cmake_args) > 0:
             build_command.extend(["--cmake-args", *options.colcon_cmake_args])
 
         if options.colcon_ament_cmake_args:

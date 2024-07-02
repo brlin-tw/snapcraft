@@ -1,6 +1,6 @@
 # -*- Mode:Python; indent-tabs-mode:nil; tab-width:4 -*-
 #
-# Copyright 2023 Canonical Ltd.
+# Copyright 2023-2024 Canonical Ltd.
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 3 as
@@ -22,8 +22,8 @@ from unittest.mock import call
 import pytest
 
 from snapcraft import cli
+from snapcraft.models.project import Project
 from snapcraft.parts.yaml_utils import _SNAP_PROJECT_FILES, apply_yaml, process_yaml
-from snapcraft.projects import Project
 
 
 @pytest.fixture(autouse=True)
@@ -44,7 +44,7 @@ def test_init_default(emitter, new_dir):
     assert project == Project.unmarshal(
         {
             "name": "my-snap-name",
-            "base": "core22",
+            "base": "core24",
             "version": "0.1",
             "summary": "Single-line elevator pitch for your amazing snap",
             "description": dedent(
@@ -58,7 +58,7 @@ def test_init_default(emitter, new_dir):
             "grade": "devel",
             "confinement": "devmode",
             "parts": {"my-part": {"plugin": "nil"}},
-            "architectures": [{"build_on": ["amd64"], "build_for": ["amd64"]}],
+            "platforms": {"amd64": {"build-on": "amd64", "build-for": "amd64"}},
         }
     )
     emitter.assert_interactions(

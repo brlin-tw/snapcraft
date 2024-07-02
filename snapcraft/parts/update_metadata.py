@@ -1,6 +1,6 @@
 # -*- Mode:Python; indent-tabs-mode:nil; tab-width:4 -*-
 #
-# Copyright 2022 Canonical Ltd.
+# Copyright 2022-2024 Canonical Ltd.
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 3 as
@@ -17,14 +17,15 @@
 """External metadata helpers."""
 
 from pathlib import Path
-from typing import Dict, Final, List
+from typing import Dict, Final, List, cast
 
 import pydantic
+from craft_application.models import ProjectTitle, SummaryStr, UniqueStrList, VersionStr
 from craft_cli import emit
 
 from snapcraft import errors
 from snapcraft.meta import ExtractedMetadata
-from snapcraft.projects import MANDATORY_ADOPTABLE_FIELDS, Project
+from snapcraft.models import MANDATORY_ADOPTABLE_FIELDS, Project
 
 _VALID_ICON_EXTENSIONS: Final[List[str]] = ["png", "svg"]
 
@@ -49,19 +50,45 @@ def update_project_metadata(
     """
     _update_project_variables(project, project_vars)
 
+    update_from_extracted_metadata(
+        project, metadata_list=metadata_list, assets_dir=assets_dir, prime_dir=prime_dir
+    )
+
+    # Fields that must not end empty
+    for field in MANDATORY_ADOPTABLE_FIELDS:
+        if not getattr(project, field):
+            raise errors.SnapcraftError(
+                f"Field {field!r} was not adopted from metadata"
+            )
+
+
+def update_from_extracted_metadata(
+    project: Project,
+    *,
+    metadata_list: List[ExtractedMetadata],
+    assets_dir: Path,
+    prime_dir: Path,
+) -> None:
+    """Set project fields from extracted metadata.
+
+    See ``update_project_metadata()`` for the parameters.
+    """
     for metadata in metadata_list:
         # Data specified in the project yaml has precedence over extracted data
         if metadata.title and not project.title:
-            project.title = metadata.title
+            project.title = cast(ProjectTitle, metadata.title)
 
         if metadata.summary and not project.summary:
-            project.summary = metadata.summary
+            project.summary = cast(SummaryStr, metadata.summary)
 
         if metadata.description and not project.description:
             project.description = metadata.description
 
         if metadata.version and not project.version:
-            project.version = metadata.version
+            project.version = cast(VersionStr, metadata.version)
+
+        if metadata.license and not project.license:
+            project.license = metadata.license
 
         if metadata.grade and not project.grade:
             project.grade = metadata.grade  # type: ignore
@@ -76,19 +103,37 @@ def update_project_metadata(
             project, metadata=metadata, assets_dir=assets_dir, prime_dir=prime_dir
         )
 
-    # Fields that must not end empty
-    for field in MANDATORY_ADOPTABLE_FIELDS:
-        if not getattr(project, field):
-            raise errors.SnapcraftError(
-                f"Field {field!r} was not adopted from metadata"
-            )
+        _update_project_links(project, metadata_list)
+
+
+def _update_project_links(
+    project: Project,
+    metadata_list: List[ExtractedMetadata],
+) -> None:
+    """Update project links from metadata.
+
+    :param project: The Project model to update.
+    :param metadata_list: A list of parsed information from metadata files.
+    """
+    for metadata in metadata_list:
+        fields = ["contact", "donation", "source_code", "issues", "website"]
+        for field in fields:
+            metadata_field = getattr(metadata, field)
+            project_field = getattr(project, field)
+            if metadata_field and project_field and project_field != metadata_field:
+                project_list = list(project_field)
+                project_list.extend(set(metadata_field) - set(project_list))
+                setattr(project, field, cast(UniqueStrList, project_list))
+
+            if not getattr(project, field):
+                setattr(project, field, cast(UniqueStrList, metadata_field))
 
 
 def _update_project_variables(project: Project, project_vars: Dict[str, str]):
     """Update project fields with values set during lifecycle processing."""
     try:
         if project_vars["version"]:
-            project.version = project_vars["version"]
+            project.version = cast(VersionStr, project_vars["version"])
         if project_vars["grade"]:
             project.grade = project_vars["grade"]  # type: ignore
     except pydantic.ValidationError as err:

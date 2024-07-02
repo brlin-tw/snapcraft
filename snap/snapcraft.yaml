@@ -16,6 +16,10 @@ assumes:
 environment:
   PATH: "$SNAP/libexec/snapcraft:/snap/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
   LD_LIBRARY_PATH: "$SNAP/none"
+  # cryptography>=42.0 cannot load legacy algorithms on
+  # Ubuntu 20.04 for armhf, ppc64el, riscv64, and s390x
+  CRYPTOGRAPHY_OPENSSL_NO_LEGACY: "1"
+
 
 apps:
   snapcraft:
@@ -186,10 +190,11 @@ parts:
     after: [snapcraft-libs, libgit2]
 
   chisel:
-    plugin: go
-    source: https://github.com/canonical/chisel.git
-    source-commit: bd27f8700cd7d2a6b4e0df6b10c3761c83a70485
-    build-snaps:
-      - go/1.18/stable
+    plugin: nil
+    stage-snaps:
+      - chisel/latest/candidate
     organize:
       bin/chisel: libexec/snapcraft/chisel
+    stage:
+      - libexec/snapcraft/chisel
+

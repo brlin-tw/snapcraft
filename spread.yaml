@@ -33,6 +33,8 @@ environment:
   GIT_AUTHOR_NAME: "Test User"
   GIT_AUTHOR_EMAIL: "test-user@email.com"
 
+  CRAFT_DEBUG: 1
+
 backends:
   lxd:
     systems:
@@ -49,26 +51,31 @@ backends:
           image: ubuntu-2004-64
           storage: 40G
       - ubuntu-22.04-64:
-          workers: 6
+          workers: 10
           storage: 20G
           image: ubuntu-2204-64
       - ubuntu-24.04-64:
-          image: ubuntu-23.04-64
-          storage: 12G
+          image: ubuntu-24.04-64
+          storage: 20G
           workers: 6
+
+      - fedora-39-64:
+          workers: 2
+          manual: true
 
   multipass:
     type: adhoc
     allocate: |
+      multipass_count=$(flock -x .spread_multipass -c 'COUNT=$(cat .spread_multipass); echo $(($COUNT + 1)) | tee .spread_multipass')
       if [ "$SPREAD_SYSTEM" = "ubuntu-24.04-64" ]; then
           image="daily:devel"
-          instance_name=spread-devel
+          instance_name="spread-devel-${multipass_count}"
       else
           # SPREAD_SYSTEM has the following format here 'ubuntu-XX.YY-64' and gets
           # translated to an image XX.YY.
           image=$(echo $SPREAD_SYSTEM | sed -e 's/ubuntu-\(.*\)-64/\1/')
           spread_name=$(echo ${image} | sed -e 's/\.//g')
-          instance_name="spread-${spread_name}"
+          instance_name="spread-${spread_name}-${multipass_count}"
       fi
 
       if [ -z "${image}" ]; then
@@ -84,34 +91,32 @@ backends:
         sudo sh -c "echo root:ubuntu | sudo chpasswd"
       multipass exec "$instance_name" -- \
         sudo sh -c \
-        "sed -i /etc/ssh/sshd_config -e 's/^PasswordAuthentication.*/PasswordAuthentication yes/' -e 's/^#PermitRootLogin.*/PermitRootLogin yes/'"
+        "if [ -d /etc/ssh/sshd_config.d/ ]
+        then
+          echo 'PasswordAuthentication yes' > /etc/ssh/sshd_config.d/10-custom.conf
+          echo 'PermitRootLogin yes' >> /etc/ssh/sshd_config.d/10-custom.conf 
+        else
+          sed -i /etc/ssh/sshd_config -E -e 's/^#?PasswordAuthentication.*/PasswordAuthentication yes/' -e 's/^#?PermitRootLogin.*/PermitRootLogin yes/'
+        fi"
       multipass exec "$instance_name" -- \
         sudo systemctl restart ssh
 
-      ADDRESS "$ip:22"
+      ADDRESS "$ip"
     discard: |
-      if [ "$SPREAD_SYSTEM" = "ubuntu-24.04-64" ]; then
-          image="daily:devel"
-          instance_name=spread-devel
-      else
-          # SPREAD_SYSTEM has the following format here 'ubuntu-XX.YY-64' and gets
-          # translated to an image XX.YY.
-          image=$(echo $SPREAD_SYSTEM | sed -e 's/ubuntu-\(.*\)-64/\1/')
-          spread_name=$(echo ${image} | sed -e 's/\.//g')
-          instance_name="spread-${spread_name}"
+      instance_name=$(multipass list --format csv | grep ",${SPREAD_SYSTEM_ADDRESS}," | cut -f1 -d\,)
+      if [[ ! -z "$instance_name" ]]; then
+        multipass delete --purge "${instance_name}"
       fi
-
-      if [ -z "${image}" ]; then
-        FATAL "$SPREAD_SYSTEM is not supported!"
-      fi
-
-      multipass delete --purge "$instance_name"
     systems:
       - ubuntu-20.04-64:
           workers: 1
           username: root
           password: ubuntu
       - ubuntu-22.04-64:
+          workers: 1
+          username: root
+          password: ubuntu
+      - ubuntu-24.04-64:
           workers: 1
           username: root
           password: ubuntu
@@ -172,45 +177,30 @@ prepare: |
     exit 1
   fi
 
-  # This unfortunately cannot be extracted into a standalone script since this
-  # portion of of YAML runs before the source code has been fetched.
-
-  # 'apt-get update' is hanging on security.ubuntu.com with IPv6. Prefer IPv4 over
-  # IPv6
-  cat <<EOF > gai.conf
-  precedence  ::1/128       50
-  precedence  ::/0          40
-  precedence  2002::/16     30
-  precedence ::/96          20
-  precedence ::ffff:0:0/96 100
-  EOF
-  if ! mv gai.conf /etc/gai.conf; then
-      echo "/etc/gai.conf is not writable, ubuntu-core system? apt-get update won't"
-      echo "be affected in that case"
-      rm -f gai.conf
-  fi
-
   # Now run 'apt-get update', but don't show output unless it fails. The logs are
   # long enough as it is.
-  tempfile="$(mktemp)"
-  if ! apt-get update > "$tempfile" 2>&1; then
-      cat "$tempfile"
-      exit 1
+  if os.query is-ubuntu; then
+    tempfile="$(mktemp)"
+    if ! apt-get update > "$tempfile" 2>&1; then
+        cat "$tempfile"
+        exit 1
+    fi
   fi
 
-  apt-get install -y snapd
-  snap install snapd
+  tests.pkgs install snapd
+
   snap wait system seed.loaded
 
-  if [ "$SPREAD_SYSTEM" = "ubuntu-20.04-64" ]; then
-      # Remove lxd and lxd-client deb packages as our implementation (pylxd) does not
-      # nicely handle the snap and deb being installed at the same time.
-      apt-get remove --purge --yes lxd lxd-client
-  fi
+    # The /snap directory does not exist in some environments
+  [ ! -d /snap ] && ln -s /var/lib/snapd/snap /snap
 
-  install_lxd
-  # Add the ubuntu user to the lxd group.
-  adduser ubuntu lxd
+  # older linux releases have separate packages for lxd and lxc (lxd-client)
+  if [ "$SPREAD_SYSTEM" = "ubuntu-20.04-64" ]; then
+    tests.pkgs remove lxd lxd-client
+  else
+    tests.pkgs remove lxd
+  fi
+  snap install lxd --channel=latest/stable
 
   # Hold snap refreshes for 24h.
   snap set system refresh.hold="$(date --date=tomorrow +%Y-%m-%dT%H:%M:%S%:z)"
@@ -221,10 +211,8 @@ prepare: |
       journalctl -xe
   fi
 
-  if [ "$SPREAD_SYSTEM" = "ubuntu-20.04-64" ]; then
-      /snap/bin/lxd waitready --timeout=30
-      /snap/bin/lxd init --auto
-  fi
+  /snap/bin/lxd waitready --timeout=30
+  /snap/bin/lxd init --auto
 
   install_snapcraft
 
@@ -250,6 +238,8 @@ suites:
      - ubuntu-22.04-armhf
      - ubuntu-22.04-s390x
      - ubuntu-22.04-ppc64el
+   environment:
+     SNAPCRAFT_BUILD_ENVIRONMENT: ""
 
  tests/spread/core22/environment/:
    summary: core22 environment tests
@@ -287,27 +277,44 @@ suites:
      - ubuntu-22.04*
 
  tests/spread/core24/:
-   summary: core24 tests
+   summary: core24 specific tests
    systems:
-     - ubuntu-22.04*
+     - ubuntu-24.04*
+   environment:
+     SNAPCRAFT_BUILD_ENVIRONMENT: ""
+
+ tests/spread/core24-suites/environment/:
+   summary: core24 environment tests
+   systems:
+     - ubuntu-24.04*
+
+ tests/spread/core24-suites/scriptlets/:
+   summary: core24 scriptlet tests
+   systems:
+     - ubuntu-24.04*
+
+ tests/spread/core24-suites/manifest/:
+   summary: core24 manifest tests
+   systems:
+     - ubuntu-24.04*
+
+ tests/spread/core24-suites/patchelf/:
+   summary: core24 patchelf tests
+   systems:
+     - ubuntu-24.04*
 
  # General, core suite
  tests/spread/general/:
    summary: tests of snapcraft core functionality
-
- tests/spread/general/grammar/:
-   summary: grammar tests
-   # run grammar tests on amd64 platforms
    systems:
-     - ubuntu-20.04
-     - ubuntu-20.04-64
-     - ubuntu-20.04-amd64
-     - ubuntu-22.04
-     - ubuntu-22.04-64
-     - ubuntu-22.04-amd64
+     - ubuntu-20.04*
+     - ubuntu-22.04*
 
  tests/spread/general/hooks/:
    summary: tests of snapcraft hook functionality
+   systems:
+     - ubuntu-20.04*
+     - ubuntu-22.04*
 
  tests/spread/core-devel/:
    summary: tests of devel base snaps

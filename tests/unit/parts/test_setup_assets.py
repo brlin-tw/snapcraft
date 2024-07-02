@@ -1,6 +1,6 @@
 # -*- Mode:Python; indent-tabs-mode:nil; tab-width:4 -*-
 #
-# Copyright 2017-2022 Canonical Ltd.
+# Copyright 2017-2022,2024 Canonical Ltd.
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 3 as
@@ -15,6 +15,7 @@
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 import os
+import shutil
 import textwrap
 from pathlib import Path
 from typing import Any, Dict
@@ -22,7 +23,7 @@ from unittest.mock import call
 
 import pytest
 
-from snapcraft import errors
+from snapcraft import errors, models
 from snapcraft.parts import setup_assets as parts_setup_assets
 from snapcraft.parts.setup_assets import (
     _create_hook_wrappers,
@@ -32,7 +33,6 @@ from snapcraft.parts.setup_assets import (
     _write_hook_wrapper,
     setup_assets,
 )
-from snapcraft.projects import Project
 
 
 @pytest.fixture
@@ -89,7 +89,7 @@ def kernel_yaml_file(new_dir):
 
 
 def test_gadget(yaml_data, gadget_yaml_file, new_dir):
-    project = Project.unmarshal(
+    project = models.Project.unmarshal(
         yaml_data(
             {
                 "type": "gadget",
@@ -104,7 +104,7 @@ def test_gadget(yaml_data, gadget_yaml_file, new_dir):
         project,
         assets_dir=Path("snap"),
         project_dir=Path.cwd(),
-        prime_dir=Path("prime"),
+        prime_dirs={None: Path("prime")},
     )
 
     # gadget file should be in meta/
@@ -113,7 +113,7 @@ def test_gadget(yaml_data, gadget_yaml_file, new_dir):
 
 
 def test_gadget_missing(yaml_data, new_dir):
-    project = Project.unmarshal(
+    project = models.Project.unmarshal(
         yaml_data(
             {
                 "type": "gadget",
@@ -129,14 +129,14 @@ def test_gadget_missing(yaml_data, new_dir):
             project,
             assets_dir=Path("snap"),
             project_dir=Path.cwd(),
-            prime_dir=Path("prime"),
+            prime_dirs={None: Path("prime")},
         )
 
     assert str(raised.value) == "gadget.yaml is required for gadget snaps"
 
 
 def test_kernel(yaml_data, kernel_yaml_file, new_dir):
-    project = Project.unmarshal(
+    project = models.Project.unmarshal(
         {
             "name": "custom-kernel",
             "type": "kernel",
@@ -152,7 +152,7 @@ def test_kernel(yaml_data, kernel_yaml_file, new_dir):
         project,
         assets_dir=Path("snap"),
         project_dir=Path.cwd(),
-        prime_dir=Path("prime"),
+        prime_dirs={None: Path("prime")},
     )
 
     # kernel file should be in meta/
@@ -161,7 +161,7 @@ def test_kernel(yaml_data, kernel_yaml_file, new_dir):
 
 
 def test_kernel_missing(yaml_data, new_dir):
-    project = Project.unmarshal(
+    project = models.Project.unmarshal(
         {
             "name": "custom-kernel",
             "type": "kernel",
@@ -177,7 +177,7 @@ def test_kernel_missing(yaml_data, new_dir):
         project,
         assets_dir=Path("snap"),
         project_dir=Path.cwd(),
-        prime_dir=Path("prime"),
+        prime_dirs={None: Path("prime")},
     )
 
     # kernel file should not be in meta/
@@ -225,7 +225,7 @@ class TestSetupAssets:
         Path("prime/usr/share/icons/my-icon.svg").touch()
 
         # define project
-        project = Project.unmarshal(
+        project = models.Project.unmarshal(
             yaml_data(
                 {
                     "adopt-info": "part",
@@ -244,7 +244,7 @@ class TestSetupAssets:
             project,
             assets_dir=Path("snap"),
             project_dir=Path.cwd(),
-            prime_dir=Path("prime"),
+            prime_dirs={None: Path("prime")},
         )
 
         # desktop file should be in meta/gui and named after app
@@ -264,13 +264,100 @@ class TestSetupAssets:
             """
         )
 
+    def test_hooks_default_handler(self, default_project, new_dir):
+        project_dir = new_dir
+        assets_dir = project_dir / "snap"
+        prime_dir = project_dir / "prime"
+
+        # Create a configure hook provided by the project
+        project_configure_hook = assets_dir / "hooks" / "configure"
+        project_configure_hook.parent.mkdir(parents=True)
+        project_configure_hook.write_text("project_configure")
+
+        # Create an install hook built through the project
+        built_install_hook = prime_dir / "snap" / "hooks" / "install"
+        built_install_hook.parent.mkdir(parents=True)
+        built_install_hook.write_text("built_install")
+
+        setup_assets(
+            default_project,
+            assets_dir=assets_dir,
+            project_dir=project_dir,
+            prime_dirs={None: Path("prime")},
+        )
+
+        hook_meta_dir = prime_dir / "meta" / "hooks"
+
+        # Assert the project configure hook has its wrapper
+        # to the copied over hook and is executable.
+        meta_configure_hook = hook_meta_dir / "configure"
+        assert meta_configure_hook.exists()
+        assert meta_configure_hook.read_text() == textwrap.dedent(
+            """\
+            #!/bin/sh
+            exec "$SNAP/snap/hooks/configure" "$@"
+        """
+        )
+        assert (
+            prime_dir / "snap" / "hooks" / "configure"
+        ).read_text() == "project_configure"
+        assert oct(meta_configure_hook.stat().st_mode)[-3:] == "755"
+
+        # Assert the project install hook has its wrapper
+        # And is executable
+        meta_install_hook = hook_meta_dir / "install"
+        assert meta_install_hook.exists()
+        assert meta_install_hook.read_text() == textwrap.dedent(
+            """\
+            #!/bin/sh
+            exec "$SNAP/snap/hooks/install" "$@"
+        """
+        )
+        assert built_install_hook.read_text() == "built_install"
+        assert oct(meta_install_hook.stat().st_mode)[-3:] == "755"
+
+    def test_hooks_with_handler(self, default_project, new_dir):
+        project_dir = new_dir
+        assets_dir = project_dir / "snap"
+        prime_dir = project_dir / "prime"
+
+        # Create a configure hook provided by the project
+        project_configure_hook = assets_dir / "hooks" / "configure"
+        project_configure_hook.parent.mkdir(parents=True)
+        project_configure_hook.write_text("project_configure")
+
+        def handler(assets_dir, prime_dir) -> None:
+            hooks_meta_dir = prime_dir / "meta" / "hooks"
+            hooks_meta_dir.mkdir(parents=True)
+            for hook in (assets_dir / "hooks").iterdir():
+                shutil.copy(hook, hooks_meta_dir / hook.name)
+
+        setup_assets(
+            default_project,
+            assets_dir=assets_dir,
+            project_dir=project_dir,
+            prime_dirs={None: Path("prime")},
+            meta_directory_handler=handler,
+        )
+
+        hook_meta_dir = prime_dir / "meta" / "hooks"
+
+        # Assert the project configure hook was copied
+        # with no wrapper, is executable and that nothing
+        # was put in prime_dir/snap/hooks
+        meta_configure_hook = hook_meta_dir / "configure"
+        assert meta_configure_hook.exists()
+        assert meta_configure_hook.read_text() == "project_configure"
+        assert not (prime_dir / "snap" / "hooks" / "configure").exists()
+        assert oct(meta_configure_hook.stat().st_mode)[-3:] == "755"
+
     def test_setup_assets_icon_in_assets_dir(self, desktop_file, yaml_data, new_dir):
         desktop_file("prime/test.desktop")
         Path("snap/gui").mkdir(parents=True)
         Path("snap/gui/icon.svg").touch()
 
         # define project
-        project = Project.unmarshal(
+        project = models.Project.unmarshal(
             yaml_data(
                 {
                     "adopt-info": "part",
@@ -289,7 +376,7 @@ class TestSetupAssets:
             project,
             assets_dir=Path("snap"),
             project_dir=Path.cwd(),
-            prime_dir=Path("prime"),
+            prime_dirs={None: Path("prime")},
         )
 
         # desktop file should be in meta/gui and named after app
@@ -319,14 +406,14 @@ class TestSetupAssets:
         Path("snap/gui").mkdir()
 
         # define project
-        project = Project.unmarshal(yaml_data({"adopt-info": "part"}))
+        project = models.Project.unmarshal(yaml_data({"adopt-info": "part"}))
 
         # setting up assets does not crash
         setup_assets(
             project,
             assets_dir=Path("snap"),
             project_dir=Path.cwd(),
-            prime_dir=Path("prime"),
+            prime_dirs={None: Path("prime")},
         )
 
         assert os.listdir("prime/meta/gui") == []
@@ -336,8 +423,8 @@ class TestSetupAssets:
         desktop_file("prime/test.desktop")
 
         # define project
-        # pylint: disable=line-too-long
-        project = Project.unmarshal(
+
+        project = models.Project.unmarshal(
             yaml_data(
                 {
                     "adopt-info": "part",
@@ -352,13 +439,12 @@ class TestSetupAssets:
                 },
             )
         )
-        # pylint: enable=line-too-long
 
         setup_assets(
             project,
             assets_dir=Path("snap"),
             project_dir=Path.cwd(),
-            prime_dir=Path("prime"),
+            prime_dirs={None: Path("prime")},
         )
 
         # desktop file should be in meta/gui and named after app
@@ -388,7 +474,7 @@ class TestCommandChain:
     """Command chain items are valid."""
 
     def test_setup_assets_app_command_chain_error(self, yaml_data, new_dir):
-        project = Project.unmarshal(
+        project = models.Project.unmarshal(
             yaml_data(
                 {
                     "adopt-info": "part1",
@@ -407,7 +493,7 @@ class TestCommandChain:
                 project,
                 assets_dir=Path("snap"),
                 project_dir=Path.cwd(),
-                prime_dir=new_dir,
+                prime_dirs={None: Path("prime")},
             )
 
         assert str(raised.value) == (
@@ -417,7 +503,7 @@ class TestCommandChain:
 
     def test_setup_assets_hook_command_chain_error(self, yaml_data, new_dir):
         # define project
-        project = Project.unmarshal(
+        project = models.Project.unmarshal(
             yaml_data(
                 {
                     "adopt-info": "part1",
@@ -433,7 +519,7 @@ class TestCommandChain:
                 project,
                 assets_dir=Path("snap"),
                 project_dir=Path.cwd(),
-                prime_dir=new_dir,
+                prime_dirs={None: Path("prime")},
             )
 
         assert str(raised.value) == (
@@ -476,7 +562,6 @@ def test_ensure_hook(new_dir):
 
     assert hook_path.exists()
     assert hook_path.read_text() == "#!/bin/true\n"
-    assert oct(hook_path.stat().st_mode)[-3:] == "755"
 
 
 def test_ensure_hook_does_not_overwrite(new_dir):
@@ -527,10 +612,6 @@ def test_create_hook_wrappers(new_dir):
     for hook_name in ["configure", "install"]:
         hook_wrapper = hooks_meta_dir / hook_name
         assert hook_wrapper.exists()
-        assert oct(hook_wrapper.stat().st_mode)[-3:] == "755"
-
-        # verify generated hook was made executable
-        assert oct((hooks_snap_dir / hook_name).stat().st_mode)[-3:] == "755"
 
 
 def test_write_hook_wrapper(new_dir):
@@ -558,4 +639,3 @@ def test_write_hook_wrapper(new_dir):
         hook_wrapper.read_text()
         == f'#!/bin/sh\nexec "$SNAP/snap/hooks/{hook_name}" "$@"\n'
     )
-    assert oct(hook_wrapper.stat().st_mode)[-3:] == "755"

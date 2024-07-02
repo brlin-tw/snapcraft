@@ -32,6 +32,13 @@ def gnome_extension():
 
 
 @pytest.fixture
+def gnome_extension_core24():
+    return gnome.GNOME(
+        yaml_data={"base": "core24", "parts": {}}, arch="amd64", target_arch="amd64"
+    )
+
+
+@pytest.fixture
 def gnome_extension_with_build_snap():
     return gnome.GNOME(
         yaml_data={
@@ -60,21 +67,32 @@ def gnome_extension_with_default_build_snap_from_latest_edge():
 ###################
 
 
-def test_get_supported_bases(gnome_extension):
-    assert gnome_extension.get_supported_bases() == ("core22",)
+def test_get_supported_bases():
+    assert gnome.GNOME.get_supported_bases() == ("core22", "core24")
 
 
-def test_get_supported_confinement(gnome_extension):
-    assert gnome_extension.get_supported_confinement() == ("strict", "devmode")
+def test_get_supported_confinement():
+    assert gnome.GNOME.get_supported_confinement() == ("strict", "devmode")
 
 
-def test_is_experimental():
-    assert gnome.GNOME.is_experimental(base="core22") is False
+@pytest.mark.parametrize("base", ["core22", "core24"])
+def test_is_experimental(base):
+    assert gnome.GNOME.is_experimental(base=base) is False
 
 
 def test_get_app_snippet(gnome_extension):
     assert gnome_extension.get_app_snippet() == {
         "command-chain": ["snap/command-chain/desktop-launch"],
+        "plugs": ["desktop", "desktop-legacy", "gsettings", "opengl", "wayland", "x11"],
+    }
+
+
+def test_get_app_snippet_core24(gnome_extension_core24):
+    assert gnome_extension_core24.get_app_snippet() == {
+        "command-chain": [
+            "snap/command-chain/gpu-2404-wrapper",
+            "snap/command-chain/desktop-launch",
+        ],
         "plugs": ["desktop", "desktop-legacy", "gsettings", "opengl", "wayland", "x11"],
     }
 
@@ -93,8 +111,11 @@ def test_get_root_snippet(gnome_extension):
             }
         },
         "layout": {
-            "/usr/lib/$SNAPCRAFT_ARCH_TRIPLET/webkit2gtk-4.0": {
-                "bind": "$SNAP/gnome-platform/usr/lib/$SNAPCRAFT_ARCH_TRIPLET/webkit2gtk-4.0"
+            "/usr/lib/$CRAFT_ARCH_TRIPLET_BUILD_FOR/webkit2gtk-4.0": {
+                "bind": "$SNAP/gnome-platform/usr/lib/$CRAFT_ARCH_TRIPLET_BUILD_FOR/webkit2gtk-4.0"
+            },
+            "/usr/lib/$CRAFT_ARCH_TRIPLET_BUILD_FOR/webkit2gtk-4.1": {
+                "bind": "$SNAP/gnome-platform/usr/lib/$CRAFT_ARCH_TRIPLET_BUILD_FOR/webkit2gtk-4.1"
             },
             "/usr/share/xml/iso-codes": {
                 "bind": "$SNAP/gnome-platform/usr/share/xml/iso-codes"
@@ -127,6 +148,28 @@ def test_get_root_snippet(gnome_extension):
     }
 
 
+def test_get_root_snippet_with_gpu(gnome_extension_core24):
+    snippet = gnome_extension_core24.get_root_snippet()
+
+    assert snippet["plugs"]["gpu-2404"] == {
+        "default-provider": "mesa-2404",
+        "interface": "content",
+        "target": "$SNAP/gpu-2404",
+    }
+
+    assert snippet["layout"]["/usr/share/libdrm"] == {
+        "bind": "$SNAP/gpu-2404/libdrm",
+    }
+
+    assert snippet["layout"]["/usr/share/drirc.d"] == {
+        "symlink": "$SNAP/gpu-2404/drirc.d",
+    }
+
+    assert snippet["layout"]["/usr/share/X11/XErrorDB"] == {
+        "symlink": "$SNAP/gpu-2404/X11/XErrorDB",
+    }
+
+
 def test_get_root_snippet_with_external_sdk(gnome_extension_with_build_snap):
     assert gnome_extension_with_build_snap.get_root_snippet() == {
         "assumes": ["snapd2.43"],
@@ -141,8 +184,11 @@ def test_get_root_snippet_with_external_sdk(gnome_extension_with_build_snap):
             }
         },
         "layout": {
-            "/usr/lib/$SNAPCRAFT_ARCH_TRIPLET/webkit2gtk-4.0": {
-                "bind": "$SNAP/gnome-platform/usr/lib/$SNAPCRAFT_ARCH_TRIPLET/webkit2gtk-4.0"
+            "/usr/lib/$CRAFT_ARCH_TRIPLET_BUILD_FOR/webkit2gtk-4.0": {
+                "bind": "$SNAP/gnome-platform/usr/lib/$CRAFT_ARCH_TRIPLET_BUILD_FOR/webkit2gtk-4.0"
+            },
+            "/usr/lib/$CRAFT_ARCH_TRIPLET_BUILD_FOR/webkit2gtk-4.1": {
+                "bind": "$SNAP/gnome-platform/usr/lib/$CRAFT_ARCH_TRIPLET_BUILD_FOR/webkit2gtk-4.1"
             },
             "/usr/share/xml/iso-codes": {
                 "bind": "$SNAP/gnome-platform/usr/share/xml/iso-codes"
@@ -195,26 +241,27 @@ class TestGetPartSnippet:
                 {"PATH": "/snap/gnome-42-2204-sdk/current/usr/bin${PATH:+:$PATH}"},
                 {
                     "XDG_DATA_DIRS": (
-                        "$SNAPCRAFT_STAGE/usr/share:/snap/gnome-42-2204-sdk"
+                        "$CRAFT_STAGE/usr/share:/snap/gnome-42-2204-sdk"
                         "/current/usr/share:/usr/share${XDG_DATA_DIRS:+:$XDG_DATA_DIRS}"
                     )
                 },
                 {
                     "LD_LIBRARY_PATH": ":".join(
                         [
-                            "/snap/gnome-42-2204-sdk/current/lib/$CRAFT_ARCH_TRIPLET",
-                            "/snap/gnome-42-2204-sdk/current/usr/lib/$CRAFT_ARCH_TRIPLET",
+                            "/snap/gnome-42-2204-sdk/current/lib/$CRAFT_ARCH_TRIPLET_BUILD_FOR",
+                            "/snap/gnome-42-2204-sdk/current/usr/lib/$CRAFT_ARCH_TRIPLET_BUILD_FOR",
                             "/snap/gnome-42-2204-sdk/current/usr/lib",
                             "/snap/gnome-42-2204-sdk/current/usr/lib/vala-current",
                             "/snap/gnome-42-2204-sdk/current/usr/lib/"
-                            "$CRAFT_ARCH_TRIPLET/pulseaudio",
+                            "$CRAFT_ARCH_TRIPLET_BUILD_FOR/pulseaudio",
                         ]
                     )
                     + "${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
                 },
                 {
                     "PKG_CONFIG_PATH": (
-                        "/snap/gnome-42-2204-sdk/current/usr/lib/$CRAFT_ARCH_TRIPLET/pkgconfig:"
+                        "/snap/gnome-42-2204-sdk/current/usr/lib/"
+                        "$CRAFT_ARCH_TRIPLET_BUILD_FOR/pkgconfig:"
                         "/snap/gnome-42-2204-sdk/current/usr/lib/pkgconfig:"
                         "/snap/gnome-42-2204-sdk/current/usr/share/pkgconfig"
                         "${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
@@ -228,7 +275,7 @@ class TestGetPartSnippet:
                 },
                 {
                     "GDK_PIXBUF_MODULE_FILE": (
-                        "/snap/gnome-42-2204-sdk/current/usr/lib/$CRAFT_ARCH_TRIPLET"
+                        "/snap/gnome-42-2204-sdk/current/usr/lib/$CRAFT_ARCH_TRIPLET_BUILD_FOR"
                         "/gdk-pixbuf-current/loaders.cache"
                     )
                 },
@@ -243,11 +290,23 @@ class TestGetPartSnippet:
                         [
                             "/snap/gnome-42-2204-sdk/current/usr/lib/python3.10",
                             "/snap/gnome-42-2204-sdk/current/usr/lib/python3/dist-packages",
-                            "/snap/gnome-42-2204-sdk/current/usr/lib/$CRAFT_ARCH_TRIPLET"
+                            "/snap/gnome-42-2204-sdk/current/usr/lib/$CRAFT_ARCH_TRIPLET_BUILD_FOR"
                             "/gobject-introspection",
                         ]
                     )
                     + "${PYTHONPATH:+:$PYTHONPATH}"
+                },
+                {
+                    "GI_TYPELIB_PATH": ":".join(
+                        [
+                            "/snap/gnome-42-2204-sdk/current/usr/lib/girepository-1.0",
+                            (
+                                "/snap/gnome-42-2204-sdk/current/usr/lib/"
+                                "$CRAFT_ARCH_TRIPLET_BUILD_FOR/girepository-1.0"
+                            ),
+                        ]
+                    )
+                    + "${GI_TYPELIB_PATH:+:$GI_TYPELIB_PATH}"
                 },
             ]
         }
@@ -259,25 +318,29 @@ def test_get_part_snippet_with_external_sdk(gnome_extension_with_build_snap):
             {"PATH": "/snap/gnome-44-2204-sdk/current/usr/bin${PATH:+:$PATH}"},
             {
                 "XDG_DATA_DIRS": (
-                    "$SNAPCRAFT_STAGE/usr/share:/snap/gnome-44-2204-sdk"
+                    "$CRAFT_STAGE/usr/share:/snap/gnome-44-2204-sdk"
                     "/current/usr/share:/usr/share${XDG_DATA_DIRS:+:$XDG_DATA_DIRS}"
                 )
             },
             {
                 "LD_LIBRARY_PATH": ":".join(
                     [
-                        "/snap/gnome-44-2204-sdk/current/lib/$CRAFT_ARCH_TRIPLET",
-                        "/snap/gnome-44-2204-sdk/current/usr/lib/$CRAFT_ARCH_TRIPLET",
+                        "/snap/gnome-44-2204-sdk/current/lib/$CRAFT_ARCH_TRIPLET_BUILD_FOR",
+                        "/snap/gnome-44-2204-sdk/current/usr/lib/$CRAFT_ARCH_TRIPLET_BUILD_FOR",
                         "/snap/gnome-44-2204-sdk/current/usr/lib",
                         "/snap/gnome-44-2204-sdk/current/usr/lib/vala-current",
-                        "/snap/gnome-44-2204-sdk/current/usr/lib/$CRAFT_ARCH_TRIPLET/pulseaudio",
+                        (
+                            "/snap/gnome-44-2204-sdk/current/usr/lib/"
+                            "$CRAFT_ARCH_TRIPLET_BUILD_FOR/pulseaudio"
+                        ),
                     ]
                 )
                 + "${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
             },
             {
                 "PKG_CONFIG_PATH": (
-                    "/snap/gnome-44-2204-sdk/current/usr/lib/$CRAFT_ARCH_TRIPLET/pkgconfig:"
+                    "/snap/gnome-44-2204-sdk/current/usr/lib/"
+                    "$CRAFT_ARCH_TRIPLET_BUILD_FOR/pkgconfig:"
                     "/snap/gnome-44-2204-sdk/current/usr/lib/pkgconfig:"
                     "/snap/gnome-44-2204-sdk/current/usr/share/pkgconfig"
                     "${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
@@ -291,7 +354,7 @@ def test_get_part_snippet_with_external_sdk(gnome_extension_with_build_snap):
             },
             {
                 "GDK_PIXBUF_MODULE_FILE": (
-                    "/snap/gnome-44-2204-sdk/current/usr/lib/$CRAFT_ARCH_TRIPLET"
+                    "/snap/gnome-44-2204-sdk/current/usr/lib/$CRAFT_ARCH_TRIPLET_BUILD_FOR"
                     "/gdk-pixbuf-current/loaders.cache"
                 )
             },
@@ -306,11 +369,23 @@ def test_get_part_snippet_with_external_sdk(gnome_extension_with_build_snap):
                     [
                         "/snap/gnome-44-2204-sdk/current/usr/lib/python3.10",
                         "/snap/gnome-44-2204-sdk/current/usr/lib/python3/dist-packages",
-                        "/snap/gnome-44-2204-sdk/current/usr/lib/$CRAFT_ARCH_TRIPLET"
+                        "/snap/gnome-44-2204-sdk/current/usr/lib/$CRAFT_ARCH_TRIPLET_BUILD_FOR"
                         "/gobject-introspection",
                     ]
                 )
                 + "${PYTHONPATH:+:$PYTHONPATH}"
+            },
+            {
+                "GI_TYPELIB_PATH": ":".join(
+                    [
+                        "/snap/gnome-44-2204-sdk/current/usr/lib/girepository-1.0",
+                        (
+                            "/snap/gnome-44-2204-sdk/current/usr/lib/"
+                            "$CRAFT_ARCH_TRIPLET_BUILD_FOR/girepository-1.0"
+                        ),
+                    ]
+                )
+                + "${GI_TYPELIB_PATH:+:$GI_TYPELIB_PATH}"
             },
         ]
     }
@@ -323,6 +398,17 @@ def test_get_parts_snippet(gnome_extension):
             "plugin": "make",
             "build-snaps": ["gnome-42-2204-sdk"],
         }
+    }
+
+
+def test_get_parts_snippet_core24(gnome_extension_core24):
+    assert gnome_extension_core24.get_parts_snippet() == {
+        "gnome/sdk": {
+            "source": str(get_extensions_data_dir() / "desktop" / "command-chain"),
+            "plugin": "make",
+            "make-parameters": ["GPU_WRAPPER=gpu-2404-wrapper"],
+            "build-snaps": ["gnome-46-2404-sdk"],
+        },
     }
 
 
