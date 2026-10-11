@@ -207,6 +207,15 @@ Snapcraft 9.1.4
 - `snapcraft#6480 <https://github.com/canonical/snapcraft/issues/6480>`__ Performance
   regression when staging files
 
+.. _release-notes-fixes-9.1.5:
+
+Snapcraft 9.1.5
+~~~~~~~~~~~~~~~
+
+- `snapcraft#6485 <https://github.com/canonical/snapcraft/issues/6485>`__
+  Fixed missing layout definition in the GPU extension to allow proper loading of
+  xcompose(5) files.
+
 Contributors
 ------------
 
@@ -215,6 +224,7 @@ this release.
 
 :literalref:`@asanvaq <https://github.com/asanvaq>`,
 :literalref:`@bepri <https://github.com/bepri>`,
+:literalref:`@brlin-tw <https://github.com/brlin-tw>`,
 :literalref:`@canon-cat <https://github.com/canon-cat>`,
 :literalref:`@cmatsuoka <https://github.com/cmatsuoka>`,
 :literalref:`@dilyn-corner <https://github.com/dilyn-corner>`,
